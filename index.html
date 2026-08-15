@@ -53,6 +53,9 @@ html, body { margin:0; padding:0; background:#10152a; }
   margin-bottom: 16px;
 }
 .char-stage { width: min(220px, 62vw); aspect-ratio: 1/1; }
+.species-picker { display:flex; gap:6px; margin-bottom:10px; }
+.species-picker button { background: var(--bg-deep); border:1px solid var(--border); border-radius:999px; width:32px; height:32px; font-size:16px; display:flex; align-items:center; justify-content:center; cursor:pointer; opacity:0.55; transition: all 0.2s; }
+.species-picker button.active { opacity:1; border-color: rgba(232,179,85,0.5); background: rgba(232,179,85,0.1); transform: scale(1.08); }
 .char-svg { width:100%; height:100%; }
 .aura-ring { animation: pulse-ring 2.6s ease-in-out infinite; transform-origin: 100px 100px; }
 @keyframes pulse-ring { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
@@ -559,7 +562,13 @@ function StarShape({ cx, cy, s, delay }) {
   );
 }
 
-function Character({ level, mood, health }) {
+const SPECIES = [
+  { id: 'seal', name: '海豹', emoji: '🦭' },
+  { id: 'panda', name: '貓熊', emoji: '🐼' },
+  { id: 'rabbit', name: '兔子', emoji: '🐰' },
+];
+
+function Character({ level, mood, health, species = 'seal' }) {
   const ringCount = Math.min(level.id, 5);
   const rings = Array.from({ length: ringCount });
   const gradId = `seal-grad-${level.id}`;
@@ -598,6 +607,21 @@ function Character({ level, mood, health }) {
         />
       ))}
 
+      {species === 'panda' && (
+        <>
+          <circle cx="66" cy="58" r="17" fill="#2b2b2b" />
+          <circle cx="134" cy="58" r="17" fill="#2b2b2b" />
+        </>
+      )}
+      {species === 'rabbit' && (
+        <>
+          <ellipse cx="73" cy="22" rx="13" ry="36" fill={`url(#${gradId})`} transform="rotate(-8 73 22)" />
+          <ellipse cx="73" cy="26" rx="6" ry="24" fill="#f6b8c4" transform="rotate(-8 73 26)" />
+          <ellipse cx="127" cy="22" rx="13" ry="36" fill={`url(#${gradId})`} transform="rotate(8 127 22)" />
+          <ellipse cx="127" cy="26" rx="6" ry="24" fill="#f6b8c4" transform="rotate(8 127 26)" />
+        </>
+      )}
+
       <path
         d="M100,48
            C 148,48 172,90 172,126
@@ -611,6 +635,13 @@ function Character({ level, mood, health }) {
 
       <SealAccessory levelId={level.id} />
 
+      {species === 'panda' && (
+        <>
+          <ellipse cx="78" cy="119" rx="15" ry="18" fill="#2b2b2b" />
+          <ellipse cx="122" cy="119" rx="15" ry="18" fill="#2b2b2b" />
+        </>
+      )}
+
       <circle cx="86" cy="88" r="2.2" fill="#4a3c2c" />
       <circle cx="114" cy="88" r="2.2" fill="#4a3c2c" />
 
@@ -621,20 +652,24 @@ function Character({ level, mood, health }) {
 
       <ellipse cx="100" cy="133" rx="4.5" ry="3.4" fill="#3a2c1e" />
 
-      <path
-        d="M84,136 L62,131 M83,141 L60,141 M84,146 L62,151"
-        stroke="rgba(58,44,30,0.55)"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        fill="none"
-      />
-      <path
-        d="M116,136 L138,131 M117,141 L140,141 M116,146 L138,151"
-        stroke="rgba(58,44,30,0.55)"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        fill="none"
-      />
+      {species !== 'panda' && (
+        <>
+          <path
+            d="M84,136 L62,131 M83,141 L60,141 M84,146 L62,151"
+            stroke="rgba(58,44,30,0.55)"
+            strokeWidth="1.4"
+            strokeLinecap="round"
+            fill="none"
+          />
+          <path
+            d="M116,136 L138,131 M117,141 L140,141 M116,146 L138,151"
+            stroke="rgba(58,44,30,0.55)"
+            strokeWidth="1.4"
+            strokeLinecap="round"
+            fill="none"
+          />
+        </>
+      )}
 
       <path d={mouthPath} stroke="#3a2c1e" strokeWidth="2.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
 
@@ -670,6 +705,7 @@ function NetWorthAdventure() {
   const [liabilities, setLiabilities] = useState(() => (storageGet('nw-data') && storageGet('nw-data').liabilities) || []);
   const [history, setHistory] = useState(() => storageGet('nw-history') || []);
   const [tab, setTab] = useState('assets');
+  const [species, setSpecies] = useState(() => storageGet('nw-species') || 'seal');
 
   const [assetForm, setAssetForm] = useState({ name: '', category: ASSET_CATEGORIES[0], amount: '', currency: 'TWD', date: todayStr() });
   const [liabForm, setLiabForm] = useState({ name: '', category: LIABILITY_CATEGORIES[0], amount: '', currency: 'TWD', date: todayStr() });
@@ -678,6 +714,10 @@ function NetWorthAdventure() {
   const [liveRates, setLiveRates] = useState(() => storageGet('nw-live-rates') || null);
   const [ratesLoading, setRatesLoading] = useState(false);
   const [ratesError, setRatesError] = useState('');
+
+  useEffect(() => {
+    storageSet('nw-species', species);
+  }, [species]);
 
   useEffect(() => {
     storageSet('nw-data', { assets, liabilities });
@@ -996,8 +1036,21 @@ function NetWorthAdventure() {
       />
 
       <section className="hero-card">
+        <div className="species-picker">
+          {SPECIES.map((s) => (
+            <button
+              key={s.id}
+              className={species === s.id ? 'active' : ''}
+              onClick={() => setSpecies(s.id)}
+              aria-label={s.name}
+              title={s.name}
+            >
+              {s.emoji}
+            </button>
+          ))}
+        </div>
         <div className="char-stage">
-          <Character level={level} mood={mood} health={health} />
+          <Character level={level} mood={mood} health={health} species={species} />
         </div>
         <div className="lv-badge">
           <span className="lv-num">Lv.{level.id}</span>
