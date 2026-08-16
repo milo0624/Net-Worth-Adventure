@@ -159,6 +159,11 @@ html, body { margin:0; padding:0; background:#10152a; }
 .week-note { font-size:11.5px; color: var(--text-muted); margin: 0 0 14px; }
 
 .chart-wrap { margin: 4px 0 16px; height: 200px; }
+.legend-list { list-style:none; margin:0 0 14px; padding:0; display:flex; flex-direction:column; gap:8px; }
+.legend-list li { display:flex; align-items:center; gap:8px; background: var(--bg-deep); border:1px solid var(--border); border-radius:10px; padding:8px 12px; font-size:12px; }
+.legend-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; display:inline-block; }
+.legend-name { flex:1; color: var(--text-primary); }
+.legend-value { color: var(--text-muted); }
 .log-list li { display:flex; align-items:center; justify-content:space-between; background: var(--bg-deep); border:1px solid var(--border); border-radius:12px; padding:10px 12px; }
 .log-date { display:block; font-size:11px; color: var(--text-muted); }
 .log-net { display:block; font-size:13px; font-weight:700; margin-top:2px; }
@@ -200,6 +205,19 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
 const ASSET_CATEGORIES = ['現金 / 存款', '股票 / 基金', '房地產', '保單 / 其他'];
 const LIABILITY_CATEGORIES = ['房貸', '車貸', '信貸 / 卡債', '其他負債'];
+
+const ASSET_CATEGORY_COLORS = {
+  '現金 / 存款': '#4fbe8e',
+  '股票 / 基金': '#5fa8f5',
+  '房地產': '#e8b355',
+  '保單 / 其他': '#c084fc',
+};
+const LIABILITY_CATEGORY_COLORS = {
+  '房貸': '#f472b6',
+  '車貸': '#fb923c',
+  '信貸 / 卡債': '#e8637a',
+  '其他負債': '#9aa3c7',
+};
 
 // 門檻依據行政院主計總處「110年（2021年）家庭財富分配統計」的十分位數：
 // D1=143萬, D3=490萬, D5(中位數)=894萬, D7=1,547萬, D9=3,391萬, 前20%平均=5,133萬
@@ -328,6 +346,18 @@ function evaluateExpr(str) {
   } catch (e) {
     return NaN;
   }
+}
+
+function computeCategoryBreakdown(itemsTWD, categories) {
+  const breakdown = {};
+  categories.forEach((c) => {
+    breakdown[c] = 0;
+  });
+  itemsTWD.forEach((item) => {
+    const cat = categories.includes(item.category) ? item.category : categories[0];
+    breakdown[cat] = (breakdown[cat] || 0) + item.twd;
+  });
+  return breakdown;
 }
 
 function uid() {
@@ -523,42 +553,53 @@ function storageSet(key, value) {
 /* ------------------------------ 角色徽章圖形 ------------------------------ */
 
 function SealAccessory({ levelId }) {
-  switch (levelId) {
-    case 3:
-      return <path d="M100,48 Q94,38 100,28 Q106,38 100,48 Z" fill="#4fbe8e" />;
-    case 4:
-      return (
-        <path
-          d="M84,168 Q100,178 116,168 L112,178 Q100,184 88,178 Z"
-          fill="#2dd4bf"
-        />
-      );
-    case 5:
-      return (
-        <path
-          d="M100,150 L111,155 L111,166 Q100,174 89,166 L89,155 Z"
-          fill="#8b8cf7"
-          stroke="#ffffff"
-          strokeWidth="1.5"
-          strokeLinejoin="round"
-        />
-      );
-    case 6:
-      return <polygon points="148,80 156,88 148,100 140,88" fill="#c084fc" />;
-    case 7:
-      return <StarShape cx="46" cy="105" s="10" />;
-    case 8:
-      return (
-        <polygon
-          points="82,42 90,26 98,40 100,22 102,40 110,26 118,42 118,50 82,50"
-          fill="#e8b355"
-          stroke="#e8b355"
-          strokeLinejoin="round"
-        />
-      );
-    default:
-      return null;
-  }
+  const mainAccessory = (() => {
+    switch (levelId) {
+      case 3:
+        return <path d="M100,48 Q94,38 100,28 Q106,38 100,48 Z" fill="#4fbe8e" />;
+      case 4:
+        return (
+          <path
+            d="M84,168 Q100,178 116,168 L112,178 Q100,184 88,178 Z"
+            fill="#2dd4bf"
+          />
+        );
+      case 5:
+        return (
+          <path
+            d="M100,150 L111,155 L111,166 Q100,174 89,166 L89,155 Z"
+            fill="#8b8cf7"
+            stroke="#ffffff"
+            strokeWidth="1.5"
+            strokeLinejoin="round"
+          />
+        );
+      case 6:
+        return <polygon points="148,80 156,88 148,100 140,88" fill="#c084fc" />;
+      case 7:
+        return <StarShape cx="46" cy="105" s="10" />;
+      case 8:
+        return (
+          <polygon
+            points="82,42 90,26 98,40 100,22 102,40 110,26 118,42 118,50 82,50"
+            fill="#e8b355"
+            stroke="#e8b355"
+            strokeLinejoin="round"
+          />
+        );
+      default:
+        return null;
+    }
+  })();
+
+  return (
+    <>
+      {levelId >= 2 && <StarShape cx="146" cy="40" s="6" delay="0.3s" />}
+      {levelId >= 6 && <circle cx="54" cy="150" r="4" fill="#f9aed0" opacity="0.9" />}
+      {levelId >= 7 && <circle cx="150" cy="150" r="3.2" fill="#9cc7f8" opacity="0.9" />}
+      {mainAccessory}
+    </>
+  );
 }
 
 function StarShape({ cx, cy, s, delay }) {
@@ -721,8 +762,14 @@ function Character({ level, mood, health, species = 'seal' }) {
 /* --------------------------------- 主程式 --------------------------------- */
 
 function NetWorthAdventure() {
-  const [assets, setAssets] = useState(() => (storageGet('nw-data') && storageGet('nw-data').assets) || []);
-  const [liabilities, setLiabilities] = useState(() => (storageGet('nw-data') && storageGet('nw-data').liabilities) || []);
+  const [assets, setAssets] = useState(() => {
+    const d = storageGet('nw-data');
+    return d && Array.isArray(d.assets) ? d.assets : [];
+  });
+  const [liabilities, setLiabilities] = useState(() => {
+    const d = storageGet('nw-data');
+    return d && Array.isArray(d.liabilities) ? d.liabilities : [];
+  });
   const [history, setHistory] = useState(() => storageGet('nw-history') || []);
   const [tab, setTab] = useState('assets');
   const [species, setSpecies] = useState(() => storageGet('nw-species') || 'seal');
@@ -832,6 +879,24 @@ function NetWorthAdventure() {
   }, [sortedHistory, latestItemDate]);
   const weeklyChange = lastCompletedEntry ? netWorth - lastCompletedEntry.netWorth : null;
 
+  const currentAssetAllocation = useMemo(() => {
+    const breakdown = computeCategoryBreakdown(assetsTWD, ASSET_CATEGORIES);
+    return ASSET_CATEGORIES.map((c) => ({ name: c, value: breakdown[c], color: ASSET_CATEGORY_COLORS[c] })).filter(
+      (d) => d.value > 0
+    );
+  }, [assetsTWD]);
+
+  const categoryTrendData = useMemo(() => {
+    return sortedHistory.map((h) => ({
+      label: new Date(h.weekKey || getWeekKey(h.date)).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' }),
+      values: ASSET_CATEGORIES.reduce((acc, c) => {
+        acc[c] = h.assetsByCategory ? h.assetsByCategory[c] ?? null : null;
+        return acc;
+      }, {}),
+    }));
+  }, [sortedHistory]);
+  const hasCategoryHistory = sortedHistory.some((h) => h.assetsByCategory);
+
   const upsertKnownItem = (list, entry) => {
     const idx = list.findIndex((i) => i.name === entry.name);
     if (idx >= 0) {
@@ -847,8 +912,14 @@ function NetWorthAdventure() {
     const amount = evaluateExpr(form.amount);
     if (!form.name.trim() || !amount || amount <= 0) return null;
     const trimmedName = form.name.trim();
-    const list = type === 'asset' ? assets : liabilities;
-    const existing = list.find((i) => i.name === trimmedName);
+    const rawList = type === 'asset' ? assets : liabilities;
+    const list = Array.isArray(rawList) ? rawList : [];
+    let existing = null;
+    try {
+      existing = list.find((i) => i && i.name === trimmedName) || null;
+    } catch (e) {
+      existing = null;
+    }
     const date = form.date || todayStr();
 
     if (existing) {
@@ -1011,18 +1082,25 @@ function NetWorthAdventure() {
   const saveSnapshot = useCallback(() => {
     const now = new Date();
     const weekKey = getWeekKey(latestItemDate);
+    const assetsByCategory = computeCategoryBreakdown(assetsTWD, ASSET_CATEGORIES);
+    const liabilitiesByCategory = computeCategoryBreakdown(liabilitiesTWD, LIABILITY_CATEGORIES);
     const idx = history.findIndex((h) => (h.weekKey || getWeekKey(h.date)) === weekKey);
     let next;
     if (idx >= 0) {
       next = history.map((h, i) =>
-        i === idx ? { ...h, date: now.toISOString(), weekKey, totalAssets, totalLiabilities, netWorth } : h
+        i === idx
+          ? { ...h, date: now.toISOString(), weekKey, totalAssets, totalLiabilities, netWorth, assetsByCategory, liabilitiesByCategory }
+          : h
       );
     } else {
-      next = [...history, { id: uid(), date: now.toISOString(), weekKey, totalAssets, totalLiabilities, netWorth }];
+      next = [
+        ...history,
+        { id: uid(), date: now.toISOString(), weekKey, totalAssets, totalLiabilities, netWorth, assetsByCategory, liabilitiesByCategory },
+      ];
     }
     setHistory(next);
     storageSet('nw-history', next);
-  }, [history, totalAssets, totalLiabilities, netWorth, latestItemDate]);
+  }, [history, totalAssets, totalLiabilities, netWorth, latestItemDate, assetsTWD, liabilitiesTWD]);
 
   const deleteHistoryEntry = useCallback(
     (id) => {
@@ -1130,6 +1208,7 @@ function NetWorthAdventure() {
         <button className={tab === 'assets' ? 'active' : ''} onClick={() => setTab('assets')}>💰 資產</button>
         <button className={tab === 'liabilities' ? 'active' : ''} onClick={() => setTab('liabilities')}>💳 負債</button>
         <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>📜 成長紀錄</button>
+        <button className={tab === 'charts' ? 'active' : ''} onClick={() => setTab('charts')}>📊 圖表</button>
         <button className={tab === 'insights' ? 'active' : ''} onClick={() => setTab('insights')}>💡 建議</button>
         <button className={tab === 'backup' ? 'active' : ''} onClick={() => setTab('backup')}>💾 備份</button>
       </nav>
@@ -1179,6 +1258,15 @@ function NetWorthAdventure() {
           onSave={saveSnapshot}
           onDeleteEntry={deleteHistoryEntry}
           onClearAll={clearHistory}
+        />
+      )}
+
+      {tab === 'charts' && (
+        <AllocationPanel
+          allocation={currentAssetAllocation}
+          totalAssets={totalAssets}
+          trendData={categoryTrendData}
+          hasCategoryHistory={hasCategoryHistory}
         />
       )}
 
@@ -1508,6 +1596,137 @@ function ItemPanel({ type, items, categories, form, setForm, onAdd, onRemove, to
         </ul>
       )}
     </section>
+  );
+}
+
+function AllocationPanel({ allocation, totalAssets, trendData, hasCategoryHistory }) {
+  const pieCanvasRef = useRef(null);
+  const pieChartRef = useRef(null);
+  const trendCanvasRef = useRef(null);
+  const trendChartRef = useRef(null);
+
+  useEffect(() => {
+    if (!pieCanvasRef.current || allocation.length === 0) return;
+    if (pieChartRef.current) pieChartRef.current.destroy();
+    const ctx = pieCanvasRef.current.getContext('2d');
+    pieChartRef.current = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: allocation.map((d) => d.name),
+        datasets: [{
+          data: allocation.map((d) => d.value),
+          backgroundColor: allocation.map((d) => d.color),
+          borderColor: '#10152a',
+          borderWidth: 2,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '60%',
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: { label: (c) => `${c.label}：${formatMoney(c.parsed)}` },
+            backgroundColor: '#1a2140',
+            borderColor: 'rgba(255,255,255,0.1)',
+            borderWidth: 1,
+            titleColor: '#9aa3c7',
+            bodyColor: '#f1ede2',
+          },
+        },
+      },
+    });
+    return () => { if (pieChartRef.current) pieChartRef.current.destroy(); };
+  }, [allocation]);
+
+  useEffect(() => {
+    if (!trendCanvasRef.current || !hasCategoryHistory || trendData.length < 2) return;
+    if (trendChartRef.current) trendChartRef.current.destroy();
+    const ctx = trendCanvasRef.current.getContext('2d');
+    trendChartRef.current = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: trendData.map((d) => d.label),
+        datasets: ASSET_CATEGORIES.map((c) => ({
+          label: c,
+          data: trendData.map((d) => d.values[c]),
+          borderColor: ASSET_CATEGORY_COLORS[c],
+          backgroundColor: ASSET_CATEGORY_COLORS[c],
+          tension: 0.3,
+          pointRadius: 2.5,
+          spanGaps: true,
+        })),
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { color: '#9aa3c7', font: { size: 11 }, boxWidth: 10 } },
+          tooltip: {
+            callbacks: { label: (c) => `${c.dataset.label}：${formatMoney(c.parsed.y)}` },
+            backgroundColor: '#1a2140',
+            borderColor: 'rgba(255,255,255,0.1)',
+            borderWidth: 1,
+            titleColor: '#9aa3c7',
+            bodyColor: '#f1ede2',
+          },
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: '#9aa3c7', font: { size: 11 } } },
+          y: {
+            grid: { color: 'rgba(255,255,255,0.08)' },
+            ticks: { color: '#9aa3c7', font: { size: 10 }, callback: (v) => (v / 10000).toFixed(0) + '萬' },
+          },
+        },
+      },
+    });
+    return () => { if (trendChartRef.current) trendChartRef.current.destroy(); };
+  }, [trendData, hasCategoryHistory]);
+
+  return (
+    <>
+      <section className="panel">
+        <div className="panel-head">
+          <h3>資產配置</h3>
+          <span className="panel-total">{formatMoney(totalAssets)}</span>
+        </div>
+        {allocation.length === 0 ? (
+          <p className="empty-note">還沒有資產資料，先到「資產」分頁新增幾筆吧。</p>
+        ) : (
+          <>
+            <div className="chart-wrap" style={{ height: 220 }}><canvas ref={pieCanvasRef}></canvas></div>
+            <ul className="legend-list">
+              {allocation.map((entry) => (
+                <li key={entry.name}>
+                  <span className="legend-dot" style={{ background: entry.color }}></span>
+                  <span className="legend-name">{entry.name}</span>
+                  <span className="legend-value">
+                    {formatMoney(entry.value)}（{((entry.value / totalAssets) * 100).toFixed(0)}%）
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h3>各分類歷史趨勢</h3>
+        </div>
+        {!hasCategoryHistory || trendData.length < 2 ? (
+          <p className="empty-note">
+            多按幾次「更新本週紀錄」，累積 2 週以上的分類資料後，這裡就會畫出各類別的走勢。
+          </p>
+        ) : (
+          <div className="chart-wrap" style={{ height: 240 }}><canvas ref={trendCanvasRef}></canvas></div>
+        )}
+        <p className="privacy-note">
+          分類趨勢是從你按下「更新本週紀錄」那一刻的資料算出來的，只有加上這個功能之後存的紀錄才會有分類明細，更早以前存的週紀錄不會補上。
+        </p>
+      </section>
+    </>
   );
 }
 
