@@ -1214,22 +1214,25 @@ function NetWorthAdventure() {
       </nav>
 
       {tab === 'assets' && (
-        <ItemPanel
-          type="asset"
-          items={assets}
-          categories={ASSET_CATEGORIES}
-          form={assetForm}
-          setForm={setAssetForm}
-          onAdd={() => addItem('asset')}
-          onRemove={(id) => removeItem('asset', id)}
-          onEdit={(id, updates) => editItem('asset', id, updates)}
-          latestItemDate={latestItemDate}
-          total={totalAssets}
-          getEffectiveRate={getEffectiveRate}
-          knownItems={knownAssetItems}
-          onImportFile={(file) => handleImportFile(file, 'asset')}
-          onCleanup={() => cleanupDuplicates('asset')}
-        />
+        <>
+          <HousePriceLink />
+          <ItemPanel
+            type="asset"
+            items={assets}
+            categories={ASSET_CATEGORIES}
+            form={assetForm}
+            setForm={setAssetForm}
+            onAdd={() => addItem('asset')}
+            onRemove={(id) => removeItem('asset', id)}
+            onEdit={(id, updates) => editItem('asset', id, updates)}
+            latestItemDate={latestItemDate}
+            total={totalAssets}
+            getEffectiveRate={getEffectiveRate}
+            knownItems={knownAssetItems}
+            onImportFile={(file) => handleImportFile(file, 'asset')}
+            onCleanup={() => cleanupDuplicates('asset')}
+          />
+        </>
       )}
 
       {tab === 'liabilities' && (
@@ -1339,6 +1342,28 @@ function BackupPanel({ onExport, onImport, message }) {
         />
       </div>
       {message && <p className="import-msg">{message}</p>}
+    </section>
+  );
+}
+
+function HousePriceLink() {
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h3>🏠 房價查詢</h3>
+      </div>
+      <p className="empty-note" style={{ textAlign: 'left', padding: '0 0 12px' }}>
+        這個離線版沒辦法自動查詢房價，但可以直接連到內政部官方的實價登錄查詢網站，自己查完再把數字填進資產清單。
+      </p>
+      <a
+        className="save-btn full"
+        href="https://lvr.land.moi.gov.tw/"
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ textDecoration: 'none', display: 'flex', justifyContent: 'center' }}
+      >
+        🔗 前往內政部實價登錄查詢
+      </a>
     </section>
   );
 }
