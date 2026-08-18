@@ -177,6 +177,9 @@ html, body { margin:0; padding:0; background:#10152a; }
 .import-row { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px; }
 .import-hint { font-size:11px; color: var(--text-muted); }
 .import-msg { font-size:11.5px; color: var(--good); margin: 0 0 12px; }
+.house-query-row { display:flex; gap:8px; margin-bottom:12px; }
+.house-query-row input { flex:1; background: var(--bg-deep); border:1px solid var(--border); color: var(--text-primary); border-radius:10px; padding:9px 10px; font-size:13px; font-family:inherit; }
+.stock-shares-input { max-width:88px; flex:none !important; }
 
 .rate-bar { background: var(--bg-panel); border:1px solid var(--border); border-radius:12px; padding:10px 12px; margin-bottom:16px; }
 .rate-bar-top { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
@@ -187,6 +190,7 @@ html, body { margin:0; padding:0; background:#10152a; }
 .rate-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
 .rate-chip { font-size:11px; color: var(--text-muted); background: var(--bg-deep); border:1px solid var(--border); border-radius:999px; padding:3px 9px; }
 .rate-error { color: var(--bad); font-size:11px; margin: 8px 0 0; }
+.team-error { color: var(--bad); font-size:12px; margin: 0 0 12px; }
 .spin { display:inline-block; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -358,6 +362,29 @@ function computeCategoryBreakdown(itemsTWD, categories) {
     breakdown[cat] = (breakdown[cat] || 0) + item.twd;
   });
   return breakdown;
+}
+
+let twseStockListCache = null;
+
+async function fetchTWSEStockList() {
+  if (twseStockListCache) return twseStockListCache;
+  const res = await fetch('https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL');
+  const rows = await res.json();
+  const map = {};
+  rows.forEach((r) => {
+    if (r && r.Code) map[r.Code] = { price: parseFloat(String(r.ClosingPrice).replace(/,/g, '')), name: r.Name };
+  });
+  twseStockListCache = map;
+  return map;
+}
+
+async function fetchStockPriceTWSE(ticker) {
+  const map = await fetchTWSEStockList();
+  const entry = map[ticker];
+  if (!entry || !entry.price || !isFinite(entry.price) || entry.price <= 0) {
+    throw new Error('not-found');
+  }
+  return { price: entry.price, name: entry.name || ticker, currency: 'TWD' };
 }
 
 function uid() {
@@ -976,6 +1003,67 @@ function NetWorthAdventure() {
     return { removed };
   };
 
+  const addStockHolding = async (ticker, shares) => {
+    const { price, name, currency } = await fetchStockPriceTWSE(ticker);
+    const amount = shares * price;
+    const displayName = `${name}（${ticker}）`;
+    const nowIso = new Date().toISOString();
+    const existing = assets.find((a) => a.ticker === ticker);
+    if (existing) {
+      editItem('asset', existing.id, {
+        name: displayName,
+        category: '股票 / 基金',
+        currency,
+        amount,
+        date: todayStr(),
+        ticker,
+        shares,
+        priceUpdatedAt: nowIso,
+      });
+      return { updated: true, name };
+    }
+    const item = {
+      id: uid(),
+      name: displayName,
+      category: '股票 / 基金',
+      currency,
+      amount,
+      date: todayStr(),
+      ticker,
+      shares,
+      priceUpdatedAt: nowIso,
+    };
+    setAssets((prev) => [...prev, item]);
+    const nextKnown = upsertKnownItem(knownAssetItems, { name: item.name, category: item.category, currency: item.currency });
+    setKnownAssetItems(nextKnown);
+    storageSet('nw-known-assets', nextKnown);
+    return { updated: false, name };
+  };
+
+  const refreshStockHolding = async (itemId) => {
+    const item = assets.find((a) => a.id === itemId);
+    if (!item || !item.ticker) return;
+    const { price, name, currency } = await fetchStockPriceTWSE(item.ticker);
+    editItem('asset', itemId, {
+      name: `${name}（${item.ticker}）`,
+      amount: item.shares * price,
+      currency,
+      date: todayStr(),
+      priceUpdatedAt: new Date().toISOString(),
+    });
+  };
+
+  const refreshAllHoldings = async () => {
+    const holdings = assets.filter((a) => a.ticker);
+    for (const h of holdings) {
+      try {
+        await refreshStockHolding(h.id);
+      } catch (e) {
+        /* 單一檔更新失敗就跳過，繼續更新其他檔 */
+      }
+    }
+  };
+
   const importItems = (type, rows) => {
     const list = type === 'asset' ? assets : liabilities;
     const setList = type === 'asset' ? setAssets : setLiabilities;
@@ -1216,6 +1304,11 @@ function NetWorthAdventure() {
       {tab === 'assets' && (
         <>
           <HousePriceLink />
+          <StockHoldingWidget
+            onAdd={addStockHolding}
+            onRefreshAll={refreshAllHoldings}
+            holdingsCount={assets.filter((a) => a.ticker).length}
+          />
           <ItemPanel
             type="asset"
             items={assets}
@@ -1231,6 +1324,7 @@ function NetWorthAdventure() {
             knownItems={knownAssetItems}
             onImportFile={(file) => handleImportFile(file, 'asset')}
             onCleanup={() => cleanupDuplicates('asset')}
+            onRefreshHolding={refreshStockHolding}
           />
         </>
       )}
@@ -1346,6 +1440,85 @@ function BackupPanel({ onExport, onImport, message }) {
   );
 }
 
+function StockHoldingWidget({ onAdd, onRefreshAll, holdingsCount }) {
+  const [ticker, setTicker] = useState('');
+  const [shares, setShares] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [refreshingAll, setRefreshingAll] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [error, setError] = useState('');
+
+  const handleAdd = async () => {
+    const sharesNum = evaluateExpr(shares);
+    if (!ticker.trim() || !sharesNum || sharesNum <= 0) {
+      setError('請輸入股票代號與股數');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    setMsg('');
+    try {
+      const result = await onAdd(ticker.trim());
+      setMsg(result.updated ? `已更新「${result.name}」的持股與股價` : `已加入「${result.name}」，${sharesNum} 股`);
+      setTicker('');
+      setShares('');
+    } catch (e) {
+      setError('查詢股價失敗，請確認是否為上市股票代號（4位數字），或稍後再試');
+    }
+    setLoading(false);
+  };
+
+  const handleRefreshAll = async () => {
+    setRefreshingAll(true);
+    setError('');
+    setMsg('');
+    try {
+      await onRefreshAll();
+      setMsg('已更新所有持股的股價');
+    } catch (e) {
+      setError('更新失敗，請稍後再試');
+    }
+    setRefreshingAll(false);
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h3>📈 持股快速加入</h3>
+        {holdingsCount > 0 && (
+          <button className="ghost-btn small" onClick={handleRefreshAll} disabled={refreshingAll}>
+            <span className={refreshingAll ? 'spin' : ''}>🔄</span> 全部更新股價
+          </button>
+        )}
+      </div>
+      <div className="house-query-row">
+        <input
+          type="text"
+          placeholder="股票代號，例如 2330"
+          value={ticker}
+          onChange={(e) => setTicker(e.target.value)}
+        />
+        <input
+          type="text"
+          inputMode="decimal"
+          placeholder="股數"
+          value={shares}
+          onChange={(e) => setShares(e.target.value)}
+          className="stock-shares-input"
+        />
+        <button className="add-btn" onClick={handleAdd} disabled={loading}>
+          {loading ? <span className="spin">🔄</span> : '＋'}
+        </button>
+      </div>
+      {msg && <p className="import-msg">{msg}</p>}
+      {error && <p className="team-error">{error}</p>}
+      <p className="privacy-note">
+        輸入台股上市股票代號（4位數字）和股數，會自動抓取最新收盤價換算成金額並加入資產清單（分類為「股票 / 基金」）。資料來源：證交所 OpenAPI，僅支援上市股票，不支援上櫃或美股，請手動輸入。之後可以在清單裡按 🔄 個別更新股價，或用上面的「全部更新股價」一次更新所有持股。
+      </p>
+    </section>
+  );
+}
+
 function HousePriceLink() {
   return (
     <section className="panel">
@@ -1393,7 +1566,7 @@ function RateBar({ liveRates, ratesLoading, ratesError, onRefresh }) {
   );
 }
 
-function ItemPanel({ type, items, categories, form, setForm, onAdd, onRemove, total, getEffectiveRate, knownItems, onImportFile, onEdit, latestItemDate, onCleanup }) {
+function ItemPanel({ type, items, categories, form, setForm, onAdd, onRemove, total, getEffectiveRate, knownItems, onImportFile, onEdit, latestItemDate, onCleanup, onRefreshHolding }) {
   const isAsset = type === 'asset';
   const listId = `known-${type}-list`;
   const fileInputRef = useRef(null);
@@ -1401,6 +1574,17 @@ function ItemPanel({ type, items, categories, form, setForm, onAdd, onRemove, to
   const [cleanupMsg, setCleanupMsg] = useState('');
   const [formMsg, setFormMsg] = useState('');
   const [editingId, setEditingId] = useState(null);
+  const [refreshingIds, setRefreshingIds] = useState([]);
+
+  const handleRefreshHolding = async (id) => {
+    setRefreshingIds((prev) => [...prev, id]);
+    try {
+      await onRefreshHolding(id);
+    } catch (e) {
+      /* 更新失敗就保留原本的金額 */
+    }
+    setRefreshingIds((prev) => prev.filter((x) => x !== id));
+  };
   const [editForm, setEditForm] = useState(null);
 
   const startEdit = (item) => {
@@ -1596,6 +1780,14 @@ function ItemPanel({ type, items, categories, form, setForm, onAdd, onRemove, to
                 <div className="item-info">
                   <span className="item-name">{item.name}</span>
                   <span className="item-cat">{item.category}</span>
+                  {item.ticker && (
+                    <span className="item-date">
+                      📈 {item.ticker} · {item.shares} 股
+                      {item.priceUpdatedAt
+                        ? ` · 股價更新於 ${new Date(item.priceUpdatedAt).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' })}`
+                        : ''}
+                    </span>
+                  )}
                   {item.date && (
                     <span className="item-date">
                       📅 {item.date}
@@ -1612,6 +1804,16 @@ function ItemPanel({ type, items, categories, form, setForm, onAdd, onRemove, to
                       <span className="item-amount-sub">≈ {formatMoney(twdValue, 'TWD')}</span>
                     )}
                   </div>
+                  {item.ticker && (
+                    <button
+                      className="edit-btn"
+                      onClick={() => handleRefreshHolding(item.id)}
+                      disabled={refreshingIds.includes(item.id)}
+                      aria-label="更新股價"
+                    >
+                      <span className={refreshingIds.includes(item.id) ? 'spin' : ''}>🔄</span>
+                    </button>
+                  )}
                   <button className="edit-btn" onClick={() => startEdit(item)} aria-label="編輯">✏️</button>
                   <button className="del-btn" onClick={() => onRemove(item.id)} aria-label="刪除">🗑</button>
                 </div>
