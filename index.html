@@ -171,6 +171,7 @@ html, body { margin:0; padding:0; background:#10152a; }
 .log-delta.tone-good { color: var(--good); }
 .log-delta.tone-bad { color: var(--bad); }
 .log-right { display:flex; align-items:center; gap:8px; }
+.log-carried-tag { font-size:9.5px; font-weight:600; color: var(--text-muted); background: rgba(255,255,255,0.06); border:1px solid var(--border); border-radius:999px; padding:1px 7px; margin-left:6px; }
 
 .empty-note { color: var(--text-muted); font-size:13px; text-align:center; padding: 18px 0; }
 
@@ -900,10 +901,35 @@ function NetWorthAdventure() {
     });
   }, [history]);
 
+  // 有些週沒有手動按「更新本週紀錄」（例如每月才操作一次）時，在兩筆真實紀錄之間
+  // 自動補上「沿用上一筆」的週紀錄，讓成長曲線與清單不會出現空白週。這些補上的
+  // 項目只在畫面上顯示，不會寫回 history 儲存，真正的資料仍以使用者手動存檔為準。
+  const sortedHistoryFilled = useMemo(() => {
+    const filled = [];
+    sortedHistory.forEach((entry) => {
+      const entryKey = entry.weekKey || getWeekKey(entry.date);
+      if (filled.length > 0) {
+        let prev = filled[filled.length - 1];
+        let cursor = new Date(prev.weekKey || getWeekKey(prev.date));
+        cursor.setDate(cursor.getDate() + 7);
+        let cursorKey = cursor.toISOString().slice(0, 10);
+        while (cursorKey < entryKey) {
+          const carried = { ...prev, id: `carried-${cursorKey}`, weekKey: cursorKey, date: cursor.toISOString(), carried: true };
+          filled.push(carried);
+          prev = carried;
+          cursor.setDate(cursor.getDate() + 7);
+          cursorKey = cursor.toISOString().slice(0, 10);
+        }
+      }
+      filled.push(entry);
+    });
+    return filled;
+  }, [sortedHistory]);
+
   const lastCompletedEntry = useMemo(() => {
     const currentWeekKey = getWeekKey(latestItemDate);
-    return [...sortedHistory].reverse().find((h) => (h.weekKey || getWeekKey(h.date)) !== currentWeekKey) || null;
-  }, [sortedHistory, latestItemDate]);
+    return [...sortedHistoryFilled].reverse().find((h) => (h.weekKey || getWeekKey(h.date)) !== currentWeekKey) || null;
+  }, [sortedHistoryFilled, latestItemDate]);
   const weeklyChange = lastCompletedEntry ? netWorth - lastCompletedEntry.netWorth : null;
 
   const currentAssetAllocation = useMemo(() => {
@@ -914,15 +940,15 @@ function NetWorthAdventure() {
   }, [assetsTWD]);
 
   const categoryTrendData = useMemo(() => {
-    return sortedHistory.map((h) => ({
+    return sortedHistoryFilled.map((h) => ({
       label: new Date(h.weekKey || getWeekKey(h.date)).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' }),
       values: ASSET_CATEGORIES.reduce((acc, c) => {
         acc[c] = h.assetsByCategory ? h.assetsByCategory[c] ?? null : null;
         return acc;
       }, {}),
     }));
-  }, [sortedHistory]);
-  const hasCategoryHistory = sortedHistory.some((h) => h.assetsByCategory);
+  }, [sortedHistoryFilled]);
+  const hasCategoryHistory = sortedHistoryFilled.some((h) => h.assetsByCategory);
 
   const upsertKnownItem = (list, entry) => {
     const idx = list.findIndex((i) => i.name === entry.name);
@@ -1205,11 +1231,11 @@ function NetWorthAdventure() {
     storageSet('nw-history', []);
   }, []);
 
-  const enrichedHistory = sortedHistory.map((h, i) => ({
+  const enrichedHistory = sortedHistoryFilled.map((h, i) => ({
     ...h,
-    delta: i === 0 ? 0 : h.netWorth - sortedHistory[i - 1].netWorth,
+    delta: i === 0 ? 0 : h.netWorth - sortedHistoryFilled[i - 1].netWorth,
   }));
-  const chartData = sortedHistory.map((h) => ({
+  const chartData = sortedHistoryFilled.map((h) => ({
     label: new Date(h.weekKey || getWeekKey(h.date)).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' }),
     netWorth: h.netWorth,
   }));
@@ -2012,7 +2038,7 @@ function HistoryPanel({ chartData, enrichedHistory, onSave, onDeleteEntry, onCle
         <h3>成長曲線</h3>
         <button className="save-btn" onClick={onSave}>💾 更新本週紀錄</button>
       </div>
-      <p className="week-note">每週只會保留一筆紀錄，同一週內再次更新會覆蓋，不會重複累加。歸屬的「週」是看資產／負債項目裡最新的日期，不是你按下按鈕當下的日期。</p>
+      <p className="week-note">每週只會保留一筆紀錄，同一週內再次更新會覆蓋，不會重複累加。歸屬的「週」是看資產／負債項目裡最新的日期，不是你按下按鈕當下的日期。中間如果有幾週沒按更新（例如每月才操作一次），系統會自動用前一筆的數字補上那些週，成長曲線不會中斷，補上的週會標示「沿用」。</p>
 
       {chartData.length >= 2 ? (
         <div className="chart-wrap"><canvas ref={canvasRef}></canvas></div>
@@ -2026,6 +2052,7 @@ function HistoryPanel({ chartData, enrichedHistory, onSave, onDeleteEntry, onCle
             <div>
               <span className="log-date">
                 {new Date(h.weekKey || getWeekKey(h.date)).toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' })} 那週
+                {h.carried && <span className="log-carried-tag">沿用</span>}
               </span>
               <span className="log-net">{formatMoney(h.netWorth)}</span>
             </div>
@@ -2035,7 +2062,9 @@ function HistoryPanel({ chartData, enrichedHistory, onSave, onDeleteEntry, onCle
                   {h.delta > 0 ? '▲' : '▼'} {formatMoney(Math.abs(h.delta))}
                 </span>
               )}
-              <button className="del-btn" onClick={() => onDeleteEntry(h.id)} aria-label="刪除這筆紀錄">🗑</button>
+              {!h.carried && (
+                <button className="del-btn" onClick={() => onDeleteEntry(h.id)} aria-label="刪除這筆紀錄">🗑</button>
+              )}
             </div>
           </li>
         ))}
