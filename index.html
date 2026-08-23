@@ -367,13 +367,26 @@ function computeCategoryBreakdown(itemsTWD, categories) {
 
 let twseStockListCache = null;
 
+function parseCsvLine(line) {
+  // 欄位皆以雙引號包住、用逗號分隔（例如 "2330","台積電","2410.00"），
+  // 股票名稱本身不含逗號，直接用正規表示式取出每個引號內的內容即可。
+  return (line.match(/"([^"]*)"/g) || []).map((s) => s.slice(1, -1));
+}
+
 async function fetchTWSEStockList() {
   if (twseStockListCache) return twseStockListCache;
-  const res = await fetch('https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL');
-  const rows = await res.json();
+  // openapi.twse.com.tw 的 JSON 版本沒有回傳 CORS 標頭（Access-Control-Allow-Origin），
+  // 瀏覽器端 fetch 會直接被擋下來，所以改用有開放 CORS 的舊版 CSV 端點，自行解析文字內容。
+  const res = await fetch('https://www.twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=json');
+  const text = await res.text();
+  const lines = text.trim().split('\n').filter(Boolean);
   const map = {};
-  rows.forEach((r) => {
-    if (r && r.Code) map[r.Code] = { price: parseFloat(String(r.ClosingPrice).replace(/,/g, '')), name: r.Name };
+  lines.slice(1).forEach((line) => {
+    const cols = parseCsvLine(line);
+    const [, code, name, , , , , , closingPrice] = cols;
+    if (code) {
+      map[code] = { price: parseFloat(String(closingPrice).replace(/,/g, '')), name };
+    }
   });
   twseStockListCache = map;
   return map;
