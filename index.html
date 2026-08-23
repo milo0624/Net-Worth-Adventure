@@ -1497,7 +1497,7 @@ function StockHoldingWidget({ onAdd, onRefreshAll, holdingsCount }) {
     setError('');
     setMsg('');
     try {
-      const result = await onAdd(ticker.trim());
+      const result = await onAdd(ticker.trim(), sharesNum);
       setMsg(result.updated ? `已更新「${result.name}」的持股與股價` : `已加入「${result.name}」，${sharesNum} 股`);
       setTicker('');
       setShares('');
