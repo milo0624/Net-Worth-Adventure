@@ -652,23 +652,44 @@ function generateInsights({ assetsTWD, liabilitiesTWD, totalAssets, totalLiabili
   return tips;
 }
 
+// 用「本地時區」的年月日格式化，而不是 toISOString()（那個是 UTC 時間）。
+// 台灣是 UTC+8，如果用 toISOString() 來判斷「今天」，每天 00:00–08:00 這段時間
+// 會誤判成前一天，連帶影響「本週」的判斷（半夜剛過 0 點還會被算進上一週）。
+function localDateStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// 把「YYYY-MM-DD」這種純日期字串，當成本地日期解析（而不是交給 new Date() 當 UTC 午夜解析），
+// 避免時區造成的日期偏移；其他格式（含時間的 ISO 字串等）則照常交給 new Date() 處理。
+function toLocalDate(dateInput) {
+  if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
+    const [y, m, day] = dateInput.split('-').map(Number);
+    return new Date(y, m - 1, day);
+  }
+  return new Date(dateInput);
+}
+
 function getWeekKey(dateInput) {
-  const d = new Date(dateInput);
+  const d = toLocalDate(dateInput);
   d.setHours(0, 0, 0, 0);
   const day = d.getDay();
   d.setDate(d.getDate() - day);
-  return d.toISOString().slice(0, 10);
+  return localDateStr(d);
 }
 
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return localDateStr(new Date());
 }
 
 function normalizeDate(value) {
   if (!value) return todayStr();
-  if (value instanceof Date && !isNaN(value)) return value.toISOString().slice(0, 10);
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  if (value instanceof Date && !isNaN(value)) return localDateStr(value);
   const parsed = new Date(value);
-  if (!isNaN(parsed)) return parsed.toISOString().slice(0, 10);
+  if (!isNaN(parsed)) return localDateStr(parsed);
   return todayStr();
 }
 
@@ -955,6 +976,19 @@ function NetWorthAdventure() {
   const [liveRates, setLiveRates] = useState(() => storageGet('nw-live-rates') || null);
   const [ratesLoading, setRatesLoading] = useState(false);
   const [ratesError, setRatesError] = useState('');
+  const [downloadsCap, setDownloadsCap] = useState(null);
+
+  useEffect(() => {
+    let mounted = true;
+    if (window.claude && typeof window.claude.use === 'function') {
+      window.claude.use('downloads').then((d) => {
+        if (mounted) setDownloadsCap(d);
+      }).catch(() => {});
+    }
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     storageSet('nw-species', species);
@@ -1052,15 +1086,15 @@ function NetWorthAdventure() {
       const entryKey = entry.weekKey || getWeekKey(entry.date);
       if (filled.length > 0) {
         let prev = filled[filled.length - 1];
-        let cursor = new Date(prev.weekKey || getWeekKey(prev.date));
+        let cursor = toLocalDate(prev.weekKey || getWeekKey(prev.date));
         cursor.setDate(cursor.getDate() + 7);
-        let cursorKey = cursor.toISOString().slice(0, 10);
+        let cursorKey = localDateStr(cursor);
         while (cursorKey < entryKey) {
           const carried = { ...prev, id: `carried-${cursorKey}`, weekKey: cursorKey, date: cursor.toISOString(), carried: true };
           filled.push(carried);
           prev = carried;
           cursor.setDate(cursor.getDate() + 7);
-          cursorKey = cursor.toISOString().slice(0, 10);
+          cursorKey = localDateStr(cursor);
         }
       }
       filled.push(entry);
@@ -1083,7 +1117,7 @@ function NetWorthAdventure() {
 
   const categoryTrendData = useMemo(() => {
     return sortedHistoryFilled.map((h) => ({
-      label: new Date(h.weekKey || getWeekKey(h.date)).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' }),
+      label: toLocalDate(h.weekKey || getWeekKey(h.date)).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' }),
       values: ASSET_CATEGORIES.reduce((acc, c) => {
         acc[c] = h.assetsByCategory ? h.assetsByCategory[c] ?? null : null;
         return acc;
@@ -1302,7 +1336,7 @@ function NetWorthAdventure() {
 
   const [backupMsg, setBackupMsg] = useState('');
 
-  const exportBackup = () => {
+  const exportBackup = async () => {
     const backup = {
       version: 1,
       exportedAt: new Date().toISOString(),
@@ -1312,11 +1346,25 @@ function NetWorthAdventure() {
       knownAssetItems,
       knownLiabilityItems,
     };
-    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const filename = `資產冒險記備份_${new Date().toISOString().slice(0, 10)}.json`;
+    const json = JSON.stringify(backup, null, 2);
+
+    if (downloadsCap) {
+      try {
+        await downloadsCap.save({ filename, data: json });
+        setBackupMsg('已下載備份檔案');
+      } catch (e) {
+        if (e && e.code === 'declined') return;
+        setBackupMsg('下載失敗，請稍後再試');
+      }
+      return;
+    }
+
+    const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `資產冒險記備份_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1393,7 +1441,7 @@ function NetWorthAdventure() {
     delta: i === 0 ? 0 : h.netWorth - sortedHistoryFilled[i - 1].netWorth,
   }));
   const chartData = sortedHistoryFilled.map((h) => ({
-    label: new Date(h.weekKey || getWeekKey(h.date)).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' }),
+    label: toLocalDate(h.weekKey || getWeekKey(h.date)).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' }),
     netWorth: h.netWorth,
   }));
 
@@ -1471,7 +1519,7 @@ function NetWorthAdventure() {
 
       {lastCompletedEntry && weeklyChange !== null && (
         <p className={`week-delta ${weeklyChange >= 0 ? 'tone-good' : 'tone-bad'}`}>
-          {weeklyChange >= 0 ? '▲' : '▼'} 比 {new Date(lastCompletedEntry.weekKey || getWeekKey(lastCompletedEntry.date)).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' })} 那週{weeklyChange >= 0 ? '增加' : '減少'} {formatMoney(Math.abs(weeklyChange))}
+          {weeklyChange >= 0 ? '▲' : '▼'} 比 {toLocalDate(lastCompletedEntry.weekKey || getWeekKey(lastCompletedEntry.date)).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' })} 那週{weeklyChange >= 0 ? '增加' : '減少'} {formatMoney(Math.abs(weeklyChange))}
         </p>
       )}
 
@@ -2300,7 +2348,7 @@ function HistoryPanel({ chartData, enrichedHistory, onSave, onDeleteEntry, onCle
           <li key={h.id}>
             <div>
               <span className="log-date">
-                {new Date(h.weekKey || getWeekKey(h.date)).toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' })} 那週
+                {toLocalDate(h.weekKey || getWeekKey(h.date)).toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' })} 那週
                 {h.carried && <span className="log-carried-tag">沿用</span>}
               </span>
               <span className="log-net">{formatMoney(h.netWorth)}</span>
