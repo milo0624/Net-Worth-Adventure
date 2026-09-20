@@ -653,13 +653,80 @@ function generateInsights({ assetsTWD, liabilitiesTWD, totalAssets, totalLiabili
 }
 
 /* --------------------------- AI 深入建議（使用者自帶 API Key） --------------------------- */
-// 直接從瀏覽器呼叫 Anthropic API：金鑰只存在使用者自己的 localStorage，
-// 不會經過任何其他伺服器。需要在請求上加 anthropic-dangerous-direct-browser-access
-// 標頭，Anthropic 才會允許瀏覽器端直接呼叫（一般後端 SDK 不需要這個標頭）。
-const AI_MODELS = [
-  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5（快、便宜）' },
-  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5（較深入）' },
+// 直接從瀏覽器呼叫各家 API：金鑰只存在使用者自己的 localStorage，不會經過任何
+// 其他伺服器。Anthropic 需要在請求上加 anthropic-dangerous-direct-browser-access
+// 標頭才允許瀏覽器端直接呼叫；Gemini 的公開文件範例本身就是直接從前端打，用
+// ?key= 帶金鑰。每家服務都各自存一把金鑰，互不影響。
+const AI_PROVIDERS = [
+  {
+    id: 'anthropic',
+    label: 'Anthropic（Claude）',
+    keyStorageKey: 'nw-ai-key-anthropic',
+    keyPlaceholder: '貼上你的 Anthropic API Key（sk-ant-...）',
+    keyHelpUrl: 'https://console.anthropic.com/settings/keys',
+    keyHelpLabel: 'console.anthropic.com',
+    models: [
+      { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5（快、便宜）' },
+      { id: 'claude-sonnet-5', label: 'Claude Sonnet 5（較深入）' },
+    ],
+  },
+  {
+    id: 'gemini',
+    label: 'Google（Gemini，免費額度）',
+    keyStorageKey: 'nw-ai-key-gemini',
+    keyPlaceholder: '貼上你的 Gemini API Key（AIza...）',
+    keyHelpUrl: 'https://aistudio.google.com/apikey',
+    keyHelpLabel: 'aistudio.google.com',
+    models: [
+      { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash（免費額度）' },
+      { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite（更快、額度更寬鬆）' },
+    ],
+  },
 ];
+
+function getAIProvider(id) {
+  return AI_PROVIDERS.find((p) => p.id === id) || AI_PROVIDERS[0];
+}
+
+async function callAIProvider(providerId, apiKey, model, prompt) {
+  if (providerId === 'gemini') {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => null);
+      throw new Error((errBody && errBody.error && errBody.error.message) || `API 回應錯誤（狀態碼 ${res.status}）`);
+    }
+    const data = await res.json();
+    const parts = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts;
+    return (parts || []).map((p) => p.text || '').join('\n').trim();
+  }
+
+  // 預設 / Anthropic
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 700,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => null);
+    throw new Error((errBody && errBody.error && errBody.error.message) || `API 回應錯誤（狀態碼 ${res.status}）`);
+  }
+  const data = await res.json();
+  return (data.content || []).map((block) => block.text || '').join('\n').trim();
+}
 
 function buildAIPrompt(s) {
   const fmt = (n) => formatMoney(n);
@@ -1657,29 +1724,54 @@ function NetWorthAdventure() {
 
 function InsightsPanel({ insights, snapshot }) {
   const toneIcon = { good: '✅', bad: '⚠️', ok: 'ℹ️' };
+  const selectStyle = {
+    background: 'var(--bg-deep)',
+    border: '1px solid var(--border)',
+    color: 'var(--text-primary)',
+    borderRadius: 10,
+    padding: '9px 10px',
+    fontSize: 13,
+    fontFamily: 'inherit',
+  };
 
-  const [apiKey, setApiKey] = useState(() => storageGet('nw-ai-key') || '');
+  const [providerId, setProviderId] = useState(() => storageGet('nw-ai-provider') || AI_PROVIDERS[0].id);
+  const provider = getAIProvider(providerId);
+
+  const [apiKey, setApiKey] = useState(() => storageGet(provider.keyStorageKey) || '');
   const [keyDraft, setKeyDraft] = useState('');
-  const [aiModel, setAiModel] = useState(() => storageGet('nw-ai-model') || AI_MODELS[0].id);
+  const [aiModel, setAiModel] = useState(() => storageGet(`nw-ai-model-${provider.id}`) || provider.models[0].id);
   const [aiText, setAiText] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
 
   useEffect(() => {
-    storageSet('nw-ai-model', aiModel);
-  }, [aiModel]);
+    storageSet('nw-ai-provider', providerId);
+  }, [providerId]);
+
+  // 切換服務商時，換讀那家自己的金鑰／模型設定，並清掉上一次的結果。
+  useEffect(() => {
+    setApiKey(storageGet(provider.keyStorageKey) || '');
+    setAiModel(storageGet(`nw-ai-model-${provider.id}`) || provider.models[0].id);
+    setKeyDraft('');
+    setAiText('');
+    setAiError('');
+  }, [providerId]);
+
+  useEffect(() => {
+    storageSet(`nw-ai-model-${provider.id}`, aiModel);
+  }, [aiModel, provider.id]);
 
   const saveKey = () => {
     const trimmed = keyDraft.trim();
     if (!trimmed) return;
     setApiKey(trimmed);
-    storageSet('nw-ai-key', trimmed);
+    storageSet(provider.keyStorageKey, trimmed);
     setKeyDraft('');
   };
 
   const clearKey = () => {
     setApiKey('');
-    storageSet('nw-ai-key', '');
+    storageSet(provider.keyStorageKey, '');
     setAiText('');
     setAiError('');
   };
@@ -1690,29 +1782,10 @@ function InsightsPanel({ insights, snapshot }) {
     setAiError('');
     setAiText('');
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: aiModel,
-          max_tokens: 700,
-          messages: [{ role: 'user', content: buildAIPrompt(snapshot) }],
-        }),
-      });
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => null);
-        throw new Error((errBody && errBody.error && errBody.error.message) || `API 回應錯誤（狀態碼 ${res.status}）`);
-      }
-      const data = await res.json();
-      const text = (data.content || []).map((block) => block.text || '').join('\n').trim();
+      const text = await callAIProvider(provider.id, apiKey, aiModel, buildAIPrompt(snapshot));
       setAiText(text || '（沒有取得回應內容，請再試一次）');
     } catch (e) {
-      setAiError(e && e.message === 'Failed to fetch' ? '連線失敗，請確認網路連線或 API Key 是否正確' : (e && e.message) || '發生未知錯誤');
+      setAiError(e && e.message === 'Failed to fetch' ? '連線失敗，可能是網路問題、API Key 不正確，或這個服務不允許瀏覽器直接呼叫' : (e && e.message) || '發生未知錯誤');
     } finally {
       setAiLoading(false);
     }
@@ -1743,31 +1816,29 @@ function InsightsPanel({ insights, snapshot }) {
           <h3>AI 深入建議</h3>
         </div>
 
+        <div className="import-row">
+          <select value={providerId} onChange={(e) => setProviderId(e.target.value)} style={{ ...selectStyle, flex: 1, minWidth: 0 }}>
+            {AI_PROVIDERS.map((p) => (
+              <option key={p.id} value={p.id}>{p.label}</option>
+            ))}
+          </select>
+        </div>
+
         {!apiKey ? (
           <>
             <p className="empty-note" style={{ textAlign: 'left', padding: '0 0 10px' }}>
-              這個功能會用你自己的 Anthropic API Key，直接從瀏覽器呼叫 Claude，金鑰只存在這台裝置的 localStorage，不會經過任何其他伺服器。還沒有 Key 的話可以到{' '}
-              <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" style={{ color: 'var(--gold)' }}>
-                console.anthropic.com
+              這個功能會用你自己的 {provider.label} API Key，直接從瀏覽器呼叫，金鑰只存在這台裝置的 localStorage，不會經過任何其他伺服器。還沒有 Key 的話可以到{' '}
+              <a href={provider.keyHelpUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--gold)' }}>
+                {provider.keyHelpLabel}
               </a>{' '}申請。
             </p>
             <div className="import-row">
               <input
                 type="password"
-                placeholder="貼上你的 Anthropic API Key（sk-ant-...）"
+                placeholder={provider.keyPlaceholder}
                 value={keyDraft}
                 onChange={(e) => setKeyDraft(e.target.value)}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  background: 'var(--bg-deep)',
-                  border: '1px solid var(--border)',
-                  color: 'var(--text-primary)',
-                  borderRadius: 10,
-                  padding: '9px 10px',
-                  fontSize: 13,
-                  fontFamily: 'inherit',
-                }}
+                style={{ ...selectStyle, flex: 1, minWidth: 0 }}
               />
               <button className="save-btn" onClick={saveKey} disabled={!keyDraft.trim()}>
                 💾 儲存
@@ -1780,19 +1851,9 @@ function InsightsPanel({ insights, snapshot }) {
               <select
                 value={aiModel}
                 onChange={(e) => setAiModel(e.target.value)}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  background: 'var(--bg-deep)',
-                  border: '1px solid var(--border)',
-                  color: 'var(--text-primary)',
-                  borderRadius: 10,
-                  padding: '9px 10px',
-                  fontSize: 13,
-                  fontFamily: 'inherit',
-                }}
+                style={{ ...selectStyle, flex: 1, minWidth: 0 }}
               >
-                {AI_MODELS.map((m) => (
+                {provider.models.map((m) => (
                   <option key={m.id} value={m.id}>{m.label}</option>
                 ))}
               </select>
@@ -1809,13 +1870,13 @@ function InsightsPanel({ insights, snapshot }) {
                 <li style={{ whiteSpace: 'pre-wrap' }}>{aiText}</li>
               </ul>
             ) : (
-              !aiLoading && !aiError && <p className="empty-note">按「詢問 AI」，讓 Claude 根據你目前的資產狀況給更深入的分析。</p>
+              !aiLoading && !aiError && <p className="empty-note">按「詢問 AI」，讓 {provider.label} 根據你目前的資產狀況給更深入的分析。</p>
             )}
           </>
         )}
 
         <p className="privacy-note" style={{ marginTop: 12 }}>
-          API Key 只存在這台裝置的瀏覽器裡，只會直接送到 Anthropic 的伺服器；你的資產與負債資料會整理成文字一併送出，用來產生這份分析。AI 給的內容僅供參考，不構成專業理財或投資建議。
+          API Key 只存在這台裝置的瀏覽器裡，只會直接送到你選的服務商伺服器；你的資產與負債資料會整理成文字一併送出，用來產生這份分析。每家服務商的金鑰分開儲存，切換服務商不會互相覆蓋。AI 給的內容僅供參考，不構成專業理財或投資建議。
         </p>
       </div>
     </section>
