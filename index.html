@@ -652,6 +652,40 @@ function generateInsights({ assetsTWD, liabilitiesTWD, totalAssets, totalLiabili
   return tips;
 }
 
+/* --------------------------- AI 深入建議（使用者自帶 API Key） --------------------------- */
+// 直接從瀏覽器呼叫 Anthropic API：金鑰只存在使用者自己的 localStorage，
+// 不會經過任何其他伺服器。需要在請求上加 anthropic-dangerous-direct-browser-access
+// 標頭，Anthropic 才會允許瀏覽器端直接呼叫（一般後端 SDK 不需要這個標頭）。
+const AI_MODELS = [
+  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5（快、便宜）' },
+  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5（較深入）' },
+];
+
+function buildAIPrompt(s) {
+  const fmt = (n) => formatMoney(n);
+  const assetLines = s.assets.map((a) => `- ${a.name}（${a.category}）：${fmt(a.twd)}`).join('\n') || '（目前沒有資產項目）';
+  const liabLines = s.liabilities.map((l) => `- ${l.name}（${l.category}）：${fmt(l.twd)}`).join('\n') || '（目前沒有負債項目）';
+  const historyLines = s.history.map((h) => `- ${h.weekKey}：淨值 ${fmt(h.netWorth)}`).join('\n') || '（尚無每週紀錄）';
+
+  return `你是「資產冒險記」這個記帳養成遊戲裡的理財助理。請根據以下使用者的資產負債資料，用繁體中文給出精簡、具體、可執行的財務觀察與建議，最多 5 點，語氣像懂財務的朋友在提醒，不要說教或重複制式警語超過一次。使用者目前的角色等級稱號是「${s.levelTitle}」。
+
+總資產：${fmt(s.totalAssets)}
+總負債：${fmt(s.totalLiabilities)}
+淨值：${fmt(s.netWorth)}
+負債健康度：${s.health.label}
+
+資產明細：
+${assetLines}
+
+負債明細：
+${liabLines}
+
+近期每週淨值紀錄（由舊到新）：
+${historyLines}
+
+請在回覆最後用一句話提醒這只是輔助參考，不構成專業理財建議。`;
+}
+
 // 用「本地時區」的年月日格式化，而不是 toISOString()（那個是 UTC 時間）。
 // 台灣是 UTC+8，如果用 toISOString() 來判斷「今天」，每天 00:00–08:00 這段時間
 // 會誤判成前一天，連帶影響「本週」的判斷（半夜剛過 0 點還會被算進上一週）。
@@ -1598,7 +1632,21 @@ function NetWorthAdventure() {
         />
       )}
 
-      {tab === 'insights' && <InsightsPanel insights={insights} />}
+      {tab === 'insights' && (
+        <InsightsPanel
+          insights={insights}
+          snapshot={{
+            levelTitle: level.title,
+            netWorth,
+            totalAssets,
+            totalLiabilities,
+            health,
+            assets: assetsTWD.map((a) => ({ name: a.name, category: a.category, twd: a.twd })),
+            liabilities: liabilitiesTWD.map((l) => ({ name: l.name, category: l.category, twd: l.twd })),
+            history: sortedHistory.slice(-8).map((h) => ({ weekKey: h.weekKey || getWeekKey(h.date), netWorth: h.netWorth })),
+          }}
+        />
+      )}
 
       {tab === 'backup' && (
         <BackupPanel onExport={exportBackup} onImport={importBackup} message={backupMsg} />
@@ -1607,8 +1655,69 @@ function NetWorthAdventure() {
   );
 }
 
-function InsightsPanel({ insights }) {
+function InsightsPanel({ insights, snapshot }) {
   const toneIcon = { good: '✅', bad: '⚠️', ok: 'ℹ️' };
+
+  const [apiKey, setApiKey] = useState(() => storageGet('nw-ai-key') || '');
+  const [keyDraft, setKeyDraft] = useState('');
+  const [aiModel, setAiModel] = useState(() => storageGet('nw-ai-model') || AI_MODELS[0].id);
+  const [aiText, setAiText] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
+
+  useEffect(() => {
+    storageSet('nw-ai-model', aiModel);
+  }, [aiModel]);
+
+  const saveKey = () => {
+    const trimmed = keyDraft.trim();
+    if (!trimmed) return;
+    setApiKey(trimmed);
+    storageSet('nw-ai-key', trimmed);
+    setKeyDraft('');
+  };
+
+  const clearKey = () => {
+    setApiKey('');
+    storageSet('nw-ai-key', '');
+    setAiText('');
+    setAiError('');
+  };
+
+  const askAI = async () => {
+    if (!apiKey || aiLoading) return;
+    setAiLoading(true);
+    setAiError('');
+    setAiText('');
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: aiModel,
+          max_tokens: 700,
+          messages: [{ role: 'user', content: buildAIPrompt(snapshot) }],
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error((errBody && errBody.error && errBody.error.message) || `API 回應錯誤（狀態碼 ${res.status}）`);
+      }
+      const data = await res.json();
+      const text = (data.content || []).map((block) => block.text || '').join('\n').trim();
+      setAiText(text || '（沒有取得回應內容，請再試一次）');
+    } catch (e) {
+      setAiError(e && e.message === 'Failed to fetch' ? '連線失敗，請確認網路連線或 API Key 是否正確' : (e && e.message) || '發生未知錯誤');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   return (
     <section className="panel">
       <div className="panel-head">
@@ -1632,10 +1741,81 @@ function InsightsPanel({ insights }) {
       <div className="ai-advice-block">
         <div className="panel-head">
           <h3>AI 深入建議</h3>
-          <button className="ghost-btn small" disabled>💡 詢問 AI</button>
         </div>
-        <p className="empty-note">
-          這個功能需要連接 Anthropic API，只有在 Claude 對話裡的互動版才能使用。這份 HTML 檔案是獨立離線的版本，暫時無法呼叫 AI 分析。
+
+        {!apiKey ? (
+          <>
+            <p className="empty-note" style={{ textAlign: 'left', padding: '0 0 10px' }}>
+              這個功能會用你自己的 Anthropic API Key，直接從瀏覽器呼叫 Claude，金鑰只存在這台裝置的 localStorage，不會經過任何其他伺服器。還沒有 Key 的話可以到{' '}
+              <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" style={{ color: 'var(--gold)' }}>
+                console.anthropic.com
+              </a>{' '}申請。
+            </p>
+            <div className="import-row">
+              <input
+                type="password"
+                placeholder="貼上你的 Anthropic API Key（sk-ant-...）"
+                value={keyDraft}
+                onChange={(e) => setKeyDraft(e.target.value)}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  background: 'var(--bg-deep)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-primary)',
+                  borderRadius: 10,
+                  padding: '9px 10px',
+                  fontSize: 13,
+                  fontFamily: 'inherit',
+                }}
+              />
+              <button className="save-btn" onClick={saveKey} disabled={!keyDraft.trim()}>
+                💾 儲存
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="import-row">
+              <select
+                value={aiModel}
+                onChange={(e) => setAiModel(e.target.value)}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  background: 'var(--bg-deep)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-primary)',
+                  borderRadius: 10,
+                  padding: '9px 10px',
+                  fontSize: 13,
+                  fontFamily: 'inherit',
+                }}
+              >
+                {AI_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
+              </select>
+              <button className="ghost-btn small" onClick={askAI} disabled={aiLoading}>
+                {aiLoading ? <span className="spin">⏳</span> : '💡'} {aiLoading ? '分析中…' : '詢問 AI'}
+              </button>
+              <button className="ghost-btn small" onClick={clearKey}>🗑 移除 Key</button>
+            </div>
+
+            {aiError && <p className="rate-error">{aiError}</p>}
+
+            {aiText ? (
+              <ul className="ai-advice-list">
+                <li style={{ whiteSpace: 'pre-wrap' }}>{aiText}</li>
+              </ul>
+            ) : (
+              !aiLoading && !aiError && <p className="empty-note">按「詢問 AI」，讓 Claude 根據你目前的資產狀況給更深入的分析。</p>
+            )}
+          </>
+        )}
+
+        <p className="privacy-note" style={{ marginTop: 12 }}>
+          API Key 只存在這台裝置的瀏覽器裡，只會直接送到 Anthropic 的伺服器；你的資產與負債資料會整理成文字一併送出，用來產生這份分析。AI 給的內容僅供參考，不構成專業理財或投資建議。
         </p>
       </div>
     </section>
