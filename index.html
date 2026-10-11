@@ -1504,18 +1504,22 @@ function NetWorthAdventure() {
     const weekKey = getWeekKey(latestItemDate);
     const assetsByCategory = computeCategoryBreakdown(assetsTWD, ASSET_CATEGORIES);
     const liabilitiesByCategory = computeCategoryBreakdown(liabilitiesTWD, LIABILITY_CATEGORIES);
+    // 逐項明細：把當週每個資產／負債項目的原幣金額與折合台幣一起存起來，
+    // 之後只靠單一備份檔就能比較任兩週是哪個項目造成差異。
+    const toItemRow = (i) => ({ name: i.name, category: i.category, currency: i.currency || 'TWD', amount: i.amount, twd: Math.round(i.twd * 100) / 100 });
+    const items = { assets: assetsTWD.map(toItemRow), liabilities: liabilitiesTWD.map(toItemRow) };
     const idx = history.findIndex((h) => (h.weekKey || getWeekKey(h.date)) === weekKey);
     let next;
     if (idx >= 0) {
       next = history.map((h, i) =>
         i === idx
-          ? { ...h, date: now.toISOString(), weekKey, totalAssets, totalLiabilities, netWorth, assetsByCategory, liabilitiesByCategory }
+          ? { ...h, date: now.toISOString(), weekKey, totalAssets, totalLiabilities, netWorth, assetsByCategory, liabilitiesByCategory, items }
           : h
       );
     } else {
       next = [
         ...history,
-        { id: uid(), date: now.toISOString(), weekKey, totalAssets, totalLiabilities, netWorth, assetsByCategory, liabilitiesByCategory },
+        { id: uid(), date: now.toISOString(), weekKey, totalAssets, totalLiabilities, netWorth, assetsByCategory, liabilitiesByCategory, items },
       ];
     }
     setHistory(next);
